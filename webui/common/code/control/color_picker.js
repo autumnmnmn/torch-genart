@@ -441,7 +441,7 @@ export async function main(spec, panelState) {
         const dpr = window.devicePixelRatio || 1;
         canvas.width = cssWidth * dpr;
         canvas.height = cssHeight * dpr;
-        ctx.scale(dpr, dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         renderArea();
     }

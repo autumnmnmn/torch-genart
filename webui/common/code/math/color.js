@@ -1,5 +1,5 @@
+
 const { Math: { sqrt, atan2, cos, sin, cbrt } } = globalThis;
-const tau = Math.PI * 2;
 
 // OkLab Magic Numbers from:
 // Ottosson, Björn "A perceptual color space for image processing"
@@ -164,6 +164,26 @@ class CIEXYZ { // CIE 1931 XYZ
     }
 }
 
+// A color derived from one of the CSS theme variables
+// Scoped to a particular element, as is the theming system
+class ThemeColor {
+    constructor(name, element) {
+        this.name = name;
+        // TODO reader = new div;
+        // make the div size 0x0 w/ display & position set such that it doesnt disrupt document flow, declare it aria-hidden
+        // register a finalization registry entry for `this` that detaches the reader element
+        // & finally set the reader element's background color to `var(--${name})`
+        //this.reader = reader;
+    }
+
+    // setter for `name` that updates the reader's css
+
+    to_nonlinear_srgb() {
+        //const style = getComputedStyle(this.reader);
+        // TODO conversion via reading computed css of `var(--${name})` at the element :3
+    }
+}
+
 function oklch_helix_map(
     lightness = [0.2, 0.9],
     chroma = 0.1,
@@ -171,7 +191,7 @@ function oklch_helix_map(
     rotations = 1.0
 ) {
     /** returns a function [0,1] -> OkLch tracing a helix through oklch space.
-        lightness ramps linearly, chroma interpolates, hue sweeps rotations*2π. */
+        lightness ramps linearly, chroma interpolates, hue sweeps rotations*tau. */
     const [lightness_start, lightness_end] = Array.isArray(lightness) ? lightness : [lightness, lightness];
     const [chroma_start, chroma_end]       = Array.isArray(chroma)    ? chroma    : [chroma, chroma];
 
@@ -179,7 +199,7 @@ function oklch_helix_map(
         return new OkLch({
             lightness: lightness_start + t * (lightness_end - lightness_start),
             chroma:    chroma_start    + t * (chroma_end    - chroma_start),
-            hue:       hue_start       + t * rotations * tau,
+            hue:       hue_start       + t * rotations * $tau,
         });
     }
     return sample;
@@ -204,13 +224,24 @@ const _CONVERSION_EDGES = new Map([
     [CIEXYZ, [
         [LinearSRGB, x => x.to_linear_srgb()],
     ]],
+    [ThemeColor, [
+        [NonlinearSRGB, x => x.to_nonlinear_srgb()]
+    ]]
 ]);
 
+// map of maps of "maps" :^)
+// Source -> (Target -> conversion function)
+const _color_map_cache = new Map();
+
 function color_map(source, target) {
-    /* Returns a function converting instances of `source` to `target`
-       by chaining the shortest path of conversion calls. */
     if (source === target) {
         return x => x;
+    }
+
+    let sourceCache = _color_map_cache.get(source);
+    if (sourceCache) {
+        let cached = sourceCache.get(target);
+        if (cached) return cached;
     }
 
     let queue = [[source, []]];
@@ -223,13 +254,17 @@ function color_map(source, target) {
         for (let [neighbor, convert] of edges) {
             let new_path = [...path, convert];
             if (neighbor === target) {
-                // Exact transliteration of Python closure default-arg variable capture
                 function chain_fn(x, p=new_path) {
                     for (let f of p) {
                         x = f(x);
                     }
                     return x;
                 }
+                if (!sourceCache) {
+                    sourceCache = new Map();
+                    _color_map_cache.set(source, sourceCache);
+                }
+                sourceCache.set(target, chain_fn);
                 return chain_fn;
             }
             if (!visited.has(neighbor)) {
@@ -241,3 +276,74 @@ function color_map(source, target) {
 
     throw new Error(`no conversion path: ${source.name} -> ${target.name}`);
 }
+
+// General-purpose convertible color
+// Access requires specifying desired color space
+class Color {
+    #source = null;
+
+    #nonlinear_srgb = null;
+    #linear_srgb = null;
+    #oklab = null;
+    #oklch = null;
+    #cie_xyz = null;
+
+    // TODO (eventually) (maybe)
+    // relative transformations with provenance-chain tracking;
+
+    constructor(value) {
+        this.#source = value.constructor;
+        this.#setSlot(this.#sourceType, value);
+    }
+
+    #getSlot(type) {
+        switch (type) {
+            case NonlinearSRGB: return this.#nonlinear_srgb;
+            case LinearSRGB:    return this.#linear_srgb;
+            case OkLab:         return this.#oklab;
+            case OkLch:         return this.#oklch;
+            case CIEXYZ:        return this.#cie_xyz;
+            case ThemeColor:    return this.#theme_color;
+            default:            return undefined;
+        }
+    }
+
+    #setSlot(type, value) {
+        switch (type) {
+            case NonlinearSRGB: this.#nonlinear_srgb = value; break;
+            case LinearSRGB:    this.#linear_srgb = value;    break;
+            case OkLab:         this.#oklab = value;          break;
+            case OkLch:         this.#oklch = value;          break;
+            case CIEXYZ:        this.#cie_xyz = value;        break;
+            case ThemeColor:    this.#theme_color = value;    break;
+        }
+    }
+
+    get(type) {
+        let val = this.#getSlot(type);
+        if (val !== null) return val;
+
+        const sourceValue = this.#getSlot(this.#source);
+        const conversion = color_map(this.#source, type);
+        const result = conversion(sourceValue);
+
+        this.#setSlot(type, result);
+        return result;
+    }
+
+    set(value) {
+        this.#nonlinear_srgb = null;
+        this.#linear_srgb = null;
+        this.#oklab = null;
+        this.#oklch = null;
+        this.#cie_xyz = null;
+
+        this.#source = value.constructor;
+        this.#setSlot(this.#source, value);
+    }
+
+    get type() {
+        return this.#source;
+    }
+}
+
