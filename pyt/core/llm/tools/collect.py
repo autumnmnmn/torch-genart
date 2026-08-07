@@ -1,0 +1,58 @@
+
+# Vibecoded - GLM 5.2
+
+import subprocess
+from typing import Optional
+
+from pyt.core.llm.tools import tool, toolprop
+from pyt.core.llm.tools.files import Document
+
+
+@tool
+class collect_source:
+    """Gather every text file from a subtree of the project into a single document.
+
+    Each file's relative path and full contents are presented together as one
+    continuous document, injecting a snapshot of the codebase directly into your
+    context."""
+
+    path: str = toolprop(
+        desc="The subdirectory to collect"
+    )
+
+    def handler(agent, session, args):
+        box_spec = session.box_spec
+
+        cmd = ["in-box", box_spec, "--no-pty", "--", "collect", "--local", "-f"]
+
+        if args.path:
+            cmd.append(args.path)
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+        except subprocess.TimeoutExpired:
+            session.thoughts.append("[collect timed out after 300 seconds]")
+            return
+
+        if result.returncode != 0:
+            error = result.stderr.strip() if result.stderr else "unknown error"
+            session.thoughts.append(f"[collect failed: {error}]")
+            return
+
+        text = result.stdout
+
+        session.files[f"collection of `{args.path}`"] = Document(f"collection of `{args.path}`", agent.name, None)
+        session.files[f"collection of `{args.path}`"].content = text
+
+        byte_count = len(text)
+        line_count = text.count('\n')
+        session.thoughts.append(
+            f"Collected source files into context "
+            f"({byte_count} bytes, {line_count} lines)."
+        )
+

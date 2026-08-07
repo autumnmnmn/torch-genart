@@ -26,6 +26,7 @@ def valid_name(name):
     return name
 
 def agent_home(agent):
+    raise Exception("deprecated!!")
     return AGENT_HOME / valid_name(agent)
 
 def agent_resolve(agent: str, filename: str) -> Path:
@@ -213,13 +214,14 @@ class update_self:
     def handler(agent, session, args):
         session.thoughts.append("Made a self-modification: " + args.thought)
         agent[args.attribute] = args.new_value
-        if args.attribute in ["self", "goals", "style"]:
-            file_name = f"{args.attribute}.md"
-            agent_write(agent.name, file_name, args.new_value)
-            for file in session.files.values():
-                if file.path == file_name:
-                    file.content = args.new_value
-                    file.dirty = False
+        return
+        #if args.attribute in ["self", "goals", "style"]:
+        #    file_name = f"{args.attribute}.md"
+        #    agent_write(agent.name, file_name, args.new_value)
+        #    for file in session.files.values():
+        #        if file.path == file_name:
+        #            file.content = args.new_value
+        #            file.dirty = False
 
 @tool
 class new_document:

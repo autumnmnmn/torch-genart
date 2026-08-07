@@ -98,8 +98,11 @@ def apply_substitutions(source, substitutions: Dict, mode="chat"):
         text_subs = {k: v for k, v in substitutions.items() if k not in typed_keys}
         intermediate = apply_substitutions(source, text_subs, mode="str")
 
-        # split alternates [text, key, text, key, ..., text] even if some texts are empty
-        parts = re.split(r'\$\{\s*([^}]+?)\s*\}', intermediate)
+        # ONLY split on the specific typed keys we care about
+        # ignoring ${...} that happens to exist inside the injected file contents!
+        key_pattern = '|'.join(re.escape(k) for k in typed_keys)
+        parts = re.split(rf'\$\{{\s*({key_pattern})\s*\}}', intermediate)
+
         result = []
         for i, part in enumerate(parts):
             if i % 2 == 0:

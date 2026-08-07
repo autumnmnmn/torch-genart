@@ -81,7 +81,8 @@ const defaults = {
     value: false,
     states: ["off", "on"],
     onUpdate: null,
-    register: null
+    register: null,
+    subcontrol: null
 };
 
 export async function main(spec, panelState) {
@@ -131,6 +132,16 @@ export async function main(spec, panelState) {
             box_container.$with(checkbox, status)
         )
     ];
+
+    if (spec.subcontrols !== null) {
+        for(const subcontrol of spec.subcontrols) {
+            const name = subcontrol.name ?? subcontrol.label;
+            panelState[name] = await $apply(`control/${subcontrol.type}`, control, subcontrol, panelState);
+            if (subcontrol.hidden) {
+                panelState[name].hide?.();
+            }
+        }
+    }
 
     const set = () => {/*TODO*/};
 

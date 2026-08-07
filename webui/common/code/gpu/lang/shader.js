@@ -208,12 +208,13 @@ export async function loadShader(shaderName, substitutions = {}) {
                 }
                 afterChangeCallback();
             },
-            register: (registration) => v.registrations.push(registration)
+            register: (registration) => v.registrations.push(registration),
+            subcontrols: v.dependents.length === 0 ? null : []
         });
 
         const processedComposites = new Set();
 
-        /// gemini's implementation, not yet reviewed
+        /// gemini's implementation, not yet fully reviewed
         const buildColor = (composite, afterChangeCallback) => {
             // 1. Deduplication: Only build the control once per composite parent
             if (processedComposites.has(composite)) return null;
@@ -227,7 +228,7 @@ export async function loadShader(shaderName, substitutions = {}) {
             return {
                 type: "color_picker",
                 label: getUiName(composite.varName),
-                name: composite.parentName,
+                name: composite.varName,
                 hidden: composite.hidden,
                 value: {
                     space: "rgb",
@@ -270,10 +271,30 @@ export async function loadShader(shaderName, substitutions = {}) {
             return buildNumber(v, afterChangeCallback);
         };
 
-        const getControlSettings = (afterChangeCallback) =>
-            vars.filter(v => v.showControl)
+        const getControlSettings = (afterChangeCallback) => {
+            const controls = vars.filter(v => v.showControl)
                 .map(v => buildControl(v, afterChangeCallback))
                 .filter(v => v);
+
+            const controlMap = {};
+            for (const c of controls) {
+                controlMap[c.name] = c;
+            }
+
+            const topLevelControls = [];
+
+            for (const c of controls) {
+                const info = varMap[c.name];
+                if (info.dependsOn && controlMap[info.dependsOn]) {
+                    const parent = controlMap[info.dependsOn];
+                    parent.subcontrols.push(c);
+                } else {
+                    topLevelControls.push(c);
+                }
+            }
+
+            return topLevelControls;
+        };
 
         let bufferSize = 0;
         const bufferAlign = Math.max(...vars.flatMap(v => v.aligns));

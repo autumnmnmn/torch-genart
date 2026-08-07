@@ -15,8 +15,6 @@ that is what sub-agents are for. Delegate work to keep everybody's tasks nice an
 
 The main agent is paused while you are working on your task.
 
-${timestamp}
-
 - Name: ```${name}```
 
 - Agent Role: Task Worker
@@ -24,8 +22,6 @@ ${timestamp}
 ${files_text}
 
 ${images}
-
-${commands_text}
 
 [log of previous thoughts and actions, summarized in plain text]
 ```
@@ -35,29 +31,9 @@ ${thoughts}
 ```
 [end of log]
 
-You must format your next action as an xml tool call.
+${commands_text}
 
-<IMPORTANT>
-Recall that your next tool call must be in the following format with NO suffix:
-
-<tool_call>
-<function=example_function_name>
-<parameter=example_parameter_1>
-value_1
-</parameter>
-<parameter=example_parameter_2>
-This is the value for the second parameter
-that can span
-multiple lines
-</parameter>
-</function>
-</tool_call>
-
-Reminder:
-- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
-- Required parameters MUST be specified
-- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
-</IMPORTANT>
+It is now ${timestamp}
 
 What will you do next?
 

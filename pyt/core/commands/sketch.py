@@ -148,6 +148,8 @@ def _run(session, args):
 
     shutil.copy(sketch.__file__, run_dir / f"{sketch_name}.py")
 
+    sketch.__dict__["args"] = remainder
+
     with open(run_dir / f".snakepyt", "w") as metadata:
         metadata.write(f"snakepyt version {session.snakepyt_version[0]}.{session.snakepyt_version[1]}\n")
 

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>tetris</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #0e0e0e;
+    color: #ccc;
+    font-family: 'Courier New', monospace;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 20px; min-height: 100vh;
+  }
+  h1 { transform: rotate(45deg); font-size: 13px; letter-spacing: 3px; color: #ff5; margin-bottom: 14px; text-transform: uppercase; }
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(10, 22px);
+    grid-template-rows: repeat(20, 22px);
+    gap: 1px; background: #222; padding: 2px;
+    border: 1px solid #3a3a3a;
+    box-shadow: 0 0 40px rgba(255,255,80,0.06);
+  }
+  .cell { background: #000; }
+  .info { font-size: 11px; color: #555; margin-top: 14px; text-align: center; line-height: 1.7; }
+  .info b { color: #aaa; }
+  .info .j { color: #ff5; }
+  
+  button {
+    margin-top: 16px;
+    background: #1a1a1a;
+    border: 1px solid #444;
+    color: #ff5;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    padding: 8px 16px;
+    cursor: pointer;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    transition: all 0.1s;
+  }
+  button:hover { background: #2a2a2a; border-color: #ff5; box-shadow: 0 0 10px rgba(255,255,80,0.2); }
+  button:active { transform: scale(0.97); }
+</style>
+</head>
+<body>
+<h1>◆ tetris ◆</h1>
+<div id="grid"></div>
+<div class="info">
+  <b>←</b> <b>→</b> move &nbsp;·&nbsp; <b>↓</b> tick &nbsp;·&nbsp; <b>↑</b> rotate<br>
+</div>
+
+<script>
+const COLS = 10, ROWS = 20;
+
+// Standard tetrominoes rotated 45° via (r,c) → (r−c, r+c), then normalized.
+const PIECES = {
+  I: { cells: [[0,0],[1,1],[2,2],[3,3]], color: '#0cf' },
+  O: { cells: [[1,0],[0,1],[2,1],[1,2]], color: '#fd0' },
+  T: { cells: [[2,0],[1,1],[0,2],[2,2]], color: '#d6f' },
+  S: { cells: [[0,1],[1,0],[2,1],[3,0]], color: '#3f3' },
+  Z: { cells: [[0,1],[0,3],[1,0],[1,2]], color: '#f44' },
+  L: { cells: [[0,0],[1,1],[1,3],[2,2]], color: '#f80' },
+  J: { cells: [[0,0],[1,1],[2,2],[3,1]], color: '#39f' },
+};
+const KEYS = Object.keys(PIECES);
+
+const grid = Array.from({length: ROWS}, () => new Array(COLS).fill(null));
+
+const gridDiv = document.getElementById('grid');
+const cells = [];
+for (let r = 0; r < ROWS; r++) {
+  cells.push([]);
+  for (let c = 0; c < COLS; c++) {
+    const d = document.createElement('div');
+    d.className = 'cell';
+    gridDiv.appendChild(d);
+    cells[r].push(d);
+  }
+}
+
+let current = null;
+
+function spawn() {
+  const k = KEYS[Math.floor(Math.random() * KEYS.length)];
+  const p = PIECES[k];
+  const w = Math.max(...p.cells.map(([r,c]) => c)) + 1;
+  const col = Math.floor((COLS - w) / 2);
+  current = { cells: p.cells, color: p.color, row: 0, col };
+  if (collides(0, col, p.cells)) {
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS; c++)
+        grid[r][c] = null;
+  }
+}
+
+function collides(row, col, shape) {
+  for (const [dr, dc] of shape) {
+    const r = row + dr, c = col + dc;
+    if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return true;
+    if (grid[r][c]) return true;
+  }
+  return false;
+}
+
+function lock() {
+  for (const [dr, dc] of current.cells)
+    grid[current.row + dr][current.col + dc] = current.color;
+  for (let r = ROWS - 1; r >= 0; r--) {
+    if (grid[r].every(c => c !== null)) {
+      grid.splice(r, 1);
+      grid.unshift(new Array(COLS).fill(null));
+      r++;
+    }
+  }
+  spawn();
+}
+
+function tryMove(dr, dc) {
+  const nr = current.row + dr, nc = current.col + dc;
+  if (!collides(nr, nc, current.cells)) {
+    current.row = nr; current.col = nc;
+    return true;
+  }
+  return false;
+}
+
+// Standard 90 degree grid rotation: (r, c) -> (c, -r)
+function rotate90(shape) {
+  const rotated = shape.map(([r, c]) => [c, -r]);
+  const minR = Math.min(...rotated.map(([r, c]) => r));
+  const minC = Math.min(...rotated.map(([r, c]) => c));
+  return rotated.map(([r, c]) => [r - minR, c - minC]);
+}
+
+function tryRotate() {
+  if (!current) return;
+  const newCells = rotate90(current.cells);
+  // Simple wall kicks: try original pos, then shift left/right up to 2 spaces
+  const kicks = [0, -1, 1, -2, 2];
+  for (const kick of kicks) {
+    if (!collides(current.row, current.col + kick, newCells)) {
+      current.cells = newCells;
+      current.col += kick;
+      return;
+    }
+  }
+}
+
+function render() {
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      cells[r][c].style.background = grid[r][c] || '#000';
+  if (current)
+    for (const [dr, dc] of current.cells) {
+      const r = current.row + dr, c = current.col + dc;
+      if (r >= 0 && r < ROWS && c >= 0 && c < COLS)
+        cells[r][c].style.background = current.color;
+    }
+}
+
+spawn();
+render();
+
+document.addEventListener('keydown', e => {
+  if (!current) return;
+  switch (e.key) {
+    case 'ArrowLeft':  tryMove(0, -1); break;
+    case 'ArrowRight': tryMove(0, 1);  break;
+    case 'ArrowDown':
+      if (!tryMove(1, 0)) lock();
+      break;
+    case 'ArrowUp':
+    case 'r':
+    case 'R':
+      tryRotate();
+      break;
+    default: return;
+  }
+  render();
+  e.preventDefault();
+});
+
+document.getElementById('rotBtn').addEventListener('click', () => {
+  tryRotate();
+  render();
+});
+</script>
+</body>
+</html>

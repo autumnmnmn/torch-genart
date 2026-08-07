@@ -6,6 +6,7 @@ from pyt.core.llm.tools import tool
 from pyt.core.llm.tools.agent import *
 from pyt.core.llm.tools.files import *
 from pyt.core.llm.tools.sandbox import *
+from pyt.core.llm.tools.collect import collect_source
 
 class AgentMode:
     def get_tools(agent, session, step): ...
@@ -46,13 +47,14 @@ class WorkerMode:
             close_document,
             new_document,
             share_document,
-            save_or_load,
-            view_image,
+            #save_or_load,
+            #view_image,
             #move_file,
             #delete_file,
             #create_file,
             run_program,
             finish_work,
+            collect_source,
             refusal
         ]
         if len(session.thoughts) > 1:
@@ -75,7 +77,7 @@ class WorkerMode:
 
     def prepare(agent, session, step):
         session.temperature = 0.9#max(0.4, 1.2 - 0.1 * len(session.thoughts))
-        step["jinja_args"] = { "reply_as": session.name }
+        #step["jinja_args"] = { "reply_as": session.name }
 
 class CreativeMode:
     def get_tools(agent, session, step):
@@ -117,7 +119,7 @@ class ArchivistMode:
             close_document,
             new_document,
             share_document,
-            save_or_load,
+            #save_or_load,
             #move_file,
             #delete_file,
             #create_file,

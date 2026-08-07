@@ -4,7 +4,8 @@ import re
 import requests
 import dataclasses
 import typing
-
+import os
+from pathlib import Path
 from typing import Any, Optional
 
 from pyt.core.llm.chatlog import AttrDict, chatEntry, load_chatlog
@@ -55,7 +56,7 @@ def toolprop(default=dataclasses.MISSING, default_factory=dataclasses.MISSING, *
         del kwargs["desc"]
     return dataclasses.field(metadata={"toolprop_args": kwargs}, **kw)
 
-def dataclass_to_toolprops(dc) -> tuple[dict, list[str]]: # props, required
+def dataclass_to_toolprops(dc) -> tuple[dict, list[str]]:
     hints = typing.get_type_hints(dc)
     props = {}
     required = []
@@ -70,10 +71,8 @@ def dataclass_to_toolprops(dc) -> tuple[dict, list[str]]: # props, required
             props[field.name] = toolprop_enum([*type_args], **toolprop_args)
         elif origin is typing.Union:
             non_none_args = [a for a in type_args if a is not type(None)]
-            if len(non_none_args) == 1: # Optional[T]
+            if len(non_none_args) == 1:
                 is_required = False
-                # TODO inlining what ought to be some kind of recursive call here
-                # function is doing too much
                 arg = non_none_args[0]
                 origin = typing.get_origin(arg)
                 if origin is typing.Literal:
@@ -98,7 +97,7 @@ def dataclass_to_tool(dc) -> dict:
     return {
         "type": "function",
         "function": {
-            "name": dc.__name__.replace('_', ' '),
+            "name": dc.__name__,#.replace('_', ' '),
             "description": dc.__doc__ or "",
             "parameters": toolprop_object(props, required)
         }
@@ -124,12 +123,33 @@ def _tool(name: str, description: str, properties: Dict) -> Dict:
         }
     }
 
+_cached_openrouter_key = None
+def _get_openrouter_key():
+    global _cached_openrouter_key
+    if _cached_openrouter_key is not None:
+        return _cached_openrouter_key
+
+    key_file = Path("/home/ponder/ponder/openrouter")
+    if key_file.exists():
+        _cached_openrouter_key = key_file.read_text().strip()
+    else:
+        # Fallback just in case!
+        _cached_openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+
+    return _cached_openrouter_key
+
 
 def tool_call(api, model, messages: List[Dict], tools: List[Dict], forced=False, jinja_args={}, **etc) -> Dict:
+    api_key = _get_openrouter_key()
     try:
         response = requests.post(
             f"{api}/v1/chat/completions",
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": "https://ponder.ooo",
+                "X-Title": "snakepyt"
+            },
             json={
                 "model": model,
                 "messages": messages,
@@ -140,9 +160,9 @@ def tool_call(api, model, messages: List[Dict], tools: List[Dict], forced=False,
             }
         )
         return response.json()
-    except:
+    except Exception as e:
         return {
             "error": "api call failed",
-            "response": response
+            "response": str(e)
         }
 

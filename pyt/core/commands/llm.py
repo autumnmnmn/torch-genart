@@ -9,8 +9,10 @@ def register_builtins(group):
 
 
 # TODO get from session
-API = "http://localhost:1312"
-MODEL = "locus"
+#API = "http://localhost:1312"
+API = "https://openrouter.ai/api"
+#MODEL = "locus"
+MODEL = "deepseek/deepseek-v4-flash-0731"
 
 from pyt.core.llm import chatlog
 from pyt.core.llm.tools import tool, toolprop, tool_call

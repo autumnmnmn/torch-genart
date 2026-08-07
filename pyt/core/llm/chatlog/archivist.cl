@@ -57,8 +57,6 @@ You can see the documents that the task-giver had open. However, the task-giver 
 ${commands_text}
 
 - Working Directory:
-Here is a full recursive view of the working directory:
-${file_tree}
 
 - Log:
 [begin log of previous actions]
@@ -67,26 +65,6 @@ ${thoughts}
 ```
 [end log of previous actions]
 
-<IMPORTANT>
-Recall that your next tool call must be in the following format with NO suffix:
 
-<tool_call>
-<function=example_function_name>
-<parameter=example_parameter_1>
-value_1
-</parameter>
-<parameter=example_parameter_2>
-This is the value for the second parameter
-that can span
-multiple lines
-</parameter>
-</function>
-</tool_call>
-
-Reminder:
-- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
-- Required parameters MUST be specified
-- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
-</IMPORTANT>
 
 

@@ -18,4 +18,5 @@ build
 *.ipynb
 *.ipynb.py
 .TODO
+.snapbox
 

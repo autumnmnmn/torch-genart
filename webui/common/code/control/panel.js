@@ -12,6 +12,7 @@ $css(`
     overflow-y: scroll;
     height: 100%;
     width: fit-content;
+    padding-right: 1rem;
 }
 
 .control-panel > * {
@@ -42,6 +43,12 @@ $css(`
 .control:has(:focus) {
     border-left: 3px solid var(--main-solid);
     padding-left: calc(0.5rem - 2px);
+}
+
+.control > .control, .control > .control:has(:focus) {
+    border-left: none;
+    padding-left: 0;
+    padding-top: 0.5rem;
 }
 
 .control[hidden] {
