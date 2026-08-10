@@ -1,6 +1,4 @@
 
-# Vibecoded - GLM 5.2
-
 import subprocess
 from typing import Optional
 
@@ -36,23 +34,15 @@ class collect_source:
                 timeout=300
             )
         except subprocess.TimeoutExpired:
-            session.thoughts.append("[collect timed out after 300 seconds]")
-            return
+            return "[collect timed out after 300 seconds]"
 
         if result.returncode != 0:
             error = result.stderr.strip() if result.stderr else "unknown error"
-            session.thoughts.append(f"[collect failed: {error}]")
-            return
+            return f"[collect failed: {error}]"
 
         text = result.stdout
 
-        session.files[f"collection of `{args.path}`"] = Document(f"collection of `{args.path}`", agent.name, None)
-        session.files[f"collection of `{args.path}`"].content = text
-
         byte_count = len(text)
         line_count = text.count('\n')
-        session.thoughts.append(
-            f"Collected source files into context "
-            f"({byte_count} bytes, {line_count} lines)."
-        )
+        return text
 

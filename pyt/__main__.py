@@ -1,5 +1,3 @@
+from pyt.repl import main
 
-import repl
-
-repl.main()
-
+main()

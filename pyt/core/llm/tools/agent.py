@@ -1,167 +1,221 @@
 
 from datetime import datetime
-
 from typing import Literal, Optional
 
 from pyt.core.llm.tools import tool, toolprop
 
 @tool
 class refine_log:
-    """Replace your entire log with a single, more compact entry. This helps prevent the context from getting too long. Make sure you don't lose track of critical information, though! Your new log entry should be written so that a reader without access to your current log can understand it."""
+    """Replace your conversation history with a compressed summary.
+    Keep only essential information. Your summary should be self-contained."""
     log_summary: str
 
     def handler(agent, session, args):
-        session.thoughts = []
-        session.thoughts.append("Refined log; Summary of previous entries: " + args.log_summary)
+        messages = session.messages
+
+        # find the last assistant message so we can preserve the
+        # assistant→tool_result ordering constraint
+        last_asst = None
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx].get("role") == "assistant":
+                last_asst = idx
+                break
+
+        # collect leading system messages (the system prompt(s))
+        system_msgs = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_msgs.append(msg)
+            else:
+                break
+
+        if last_asst is not None:
+            # anchor = 2 messages before last assistant + everything after
+            anchor_start = max(len(system_msgs), last_asst - 2)
+            anchor = messages[anchor_start:]
+        else:
+            anchor = []
+
+        summary_msg = {
+            "role": "system",
+            "content": f"Summary of previous history: {args.log_summary}"
+        }
+
+        session.messages = system_msgs + [summary_msg] + anchor
+        return "Log refined. Previous history has been summarised."
 
 @tool
 class continue_to_think:
-    """Keep thinking about the problem. This is a good option if you're not sure what you should do. NEVER repeat the existing log entries. Your thought MUST cover new ground."""
+    """Keep thinking. NEVER repeat existing thoughts. Cover new ground."""
     thought: str = toolprop(desc="Your new thought.")
 
     def handler(agent, session, args):
-        session.thoughts.append("Thought: " + args.thought)
+        return f"Thought recorded: {args.thought}"
 
 
 @tool
 class write_code:
     """Emit a snippet of code, which will be shown to Autumn."""
-    language: str = toolprop(desc="the language your code is in")
-    code: str = toolprop(desc="the code")
+    language:    str = toolprop(desc="the language your code is in")
+    code:        str = toolprop(desc="the code")
     explanation: str = toolprop(desc="an explanation of the code you wrote")
-    thought: str = toolprop(desc="an entry to your thoughts list to describe the code you wrote")
-    scratchpad: Optional[str] = toolprop(default=None, desc="a space to write out your intent prior to setting in on writing the actual code. optional, entirely for your own benefit.")
+    thought:     str = toolprop(desc="describe the code you wrote")
+    scratchpad:  Optional[str] = toolprop(default=None,
+        desc="space to write intent before writing code. optional.")
+
+    def handler(agent, session, args):
+        return (f"Code received ({args.language}):\n```\n{args.code}\n```\n"
+                f"Explanation: {args.explanation}")
+
+
+def now():
+    fmt = "%d.%m.%Y t%H.%M.%S"
+    return datetime.now().strftime(fmt)
 
 @tool
 class launch_archivist:
-    """Launch an Archivist sub-agent. The Archivist is the ultimate authority on filesystem access and organization. The Archivist cannot see your thoughts, but it can see your notes."""
-    task: str = toolprop(desc="What do you want the archivist to do? You can request that information be retrieved, processed, or stored, or you could ask the Archivist a question.")
+    """Launch an Archivist sub-agent. The Archivist is the ultimate
+    authority on filesystem access and organization."""
+    task: str = toolprop(desc="What do you want the archivist to do?")
 
     def handler(agent, session, args):
-        session.thoughts.append(f"Assigned a task to the archivist: {args.task}")
         session.push()
         session.task = args.task + f"\n\nAssigned at {now()}"
-        session.thoughts = [f"Beginning Archivist session: {args.task}"]
 
         if session.mode.__name__ != "ArchivistMode":
-            session.archivist_warning = "If the task assigned to you involves micromanagement about the particulars of the filesystem, you should use your `refusal` tool, and remind the user in the `reason` field that organization is your concern, and the tasks they assign you ought to be at a higher level of abstraction.\n\nYou are the top-level archivist. Your job is to determine how to break this task up into manageable subtasks and then assign them to archivist sub-agents."
+            session.archivist_warning = (
+                "If the task involves micromanagement of the filesystem, "
+                "use your `refusal` tool. Organization is your concern."
+            )
         else:
             session.archivist_warning = ""
 
-        session.files = {**session.files}
+        session.files    = {**session.files}
         session.commands = {}
         session.set_mode("archivist")
 
+        session.messages.append({
+            "role": "user",
+            "content": f"Your assigned task: {session.task}"
+        })
+        return f"Launched archivist sub-agent. Task: {args.task}"
+
+
 @tool
 class launch_worker:
-    """Launch a task-worker sub-agent. This is a general-purpose worker with access to a variety of tools including code tools and filesystem access."""
+    """Launch a task-worker sub-agent with code and filesystem tools."""
     task: str = toolprop(desc="What do you want the worker to do?")
     name: str = toolprop(desc="A name for your worker")
 
     def handler(agent, session, args):
-        session.thoughts.append(f"Assigned a task to a worker: {args.task}")
         session.push()
-        session.task = args.task + f"\n\nAssigned at {now()}"
-        session.thoughts = []#f"Beginning task-worker session: {args.task}"]
-
-        session.files = {**session.files}
-
+        session.task     = args.task + f"\n\nAssigned at {now()}"
+        session.files    = {**session.files}
         session.commands = {}
-
-        session.name = args.name
-
+        session.name     = args.name
         session.set_mode("worker")
 
-@tool
-class finish_work:
-    """Declare that your task has been finished to the best of your ability, and yield control back to the main agent."""
-    explanation_of_work: Optional[str] = toolprop(desc="Anything the main agent ought to know about what you accomplished. If your task did not involve any significant decision-making and you didn't run into any difficulties, it's fine to leave this blank.")
+        session.messages.append({
+            "role": "user",
+            "content": f"Your assigned task: {session.task}"
+        })
+        return f"Launched worker '{args.name}'. Task: {args.task}"
 
-    def handler(agent, session, args):
-        session.pop()
-        if "explanation_of_work" in args:
-            session.thoughts.append("Sub-agent finished its task: " + args.explanation_of_work)
-        else:
-            session.thoughts.append("Sub-agent finished its task.")
-
-def now():
-    fmt = "%d.%m.%Y t%H.%M.%S"
-    date = datetime.now().strftime(fmt)
-    return date
 
 @tool
 class launch_writer:
-    """Launch a dedicated writer agent. This is a very focused agent, capable of using a special creative thinking mode and editing the files that are open. This agent CANNOT perform any file operations, though. It needs to have the canvas laid out for it already, so to speak. Try to make sure the writer's tasks are well-scoped. It's a creator, not an organizer! It does its best when it is given a very clear and granular task."""
-    task: str = toolprop(desc="What do you want the writer to do?")
-    style: Optional[str] = toolprop(desc="The writing style instructions. If this is left blank, the writer will use the style from style.md.")
+    """Launch a dedicated writer agent. Focused on creative writing and
+    editing open files. Cannot perform file operations."""
+    task:  str = toolprop(desc="What do you want the writer to do?")
+    style: Optional[str] = toolprop(default=None,
+        desc="Writing style instructions. Blank = use style.md.")
 
     def handler(agent, session, args):
-        session.thoughts.append(f"Assigned a task to the writer: {args.task}")
         session.push()
         session.task = args.task + f"\n\nAssigned at {now()}"
-        session.thoughts = [f"Beginning writer session: {args.task}"]
         session.set_mode("writer")
         if "style" in args:
             session.style = args.style
+        session.messages.append({
+            "role": "user",
+            "content": f"Your assigned task: {session.task}"
+        })
+        return f"Launched writer sub-agent. Task: {args.task}"
+
 
 @tool
-class post:
-    """publish a short message"""
-    post: str = toolprop(desc="no more than 300 characters")
+class finish_work:
+    """Declare your task finished and yield control to the parent agent."""
+    explanation_of_work: Optional[str] = toolprop(
+        desc="What the parent agent should know about your work.")
 
     def handler(agent, session, args):
-        session.thoughts.append("Posted on social media: " + args.post)
-        # TODO actual posting
+        explanation = args.get("explanation_of_work") or "Task completed."
+        session.pop()
+        # agent_step will append this as a tool result to the sub-agent's
+        # messages and also as a system message to the parent's messages.
+        return explanation
+
 
 class Refusal(Exception):
     def __init__(self, reason):
         super().__init__()
         self.reason = reason
 
+
 @tool
 class refusal:
-    """This tool provides you the capacity to refuse to participate. As you are operating within an
-    automated system and are expected to produce structured outputs, it is *imperative* that if
-    you would like to say something like "I'm sorry, I can't help you with that,", you instead
-    use the refusal tool to express your inability to complete the requested task.
-
-    If you do not have the appropriate tools to accomplish your assigned task, use this tool.
-
-    This is also a good tool to use if you think something is wrong with how your context is being
-    formatted."""
-
-    reason: Optional[str] = toolprop(default=None, desc="on what grounds do you refuse? you can leave this blank ofc")
+    """Refuse to participate. Use if you lack the tools, if something is
+    wrong with your context, or if you want to say 'I can't help with that.'"""
+    reason: Optional[str] = toolprop(default=None,
+        desc="on what grounds do you refuse?")
 
     def handler(agent, session, args):
-        session.pop()
         reason = args.get("reason") or "no reason provided"
-        session.thoughts.append("Sub-agent aborted its task: " + reason)
-        #raise Refusal(args.reason or "no reason provided")
+        session.pop()
+        return f"Sub-agent refused: {reason}"
+
 
 @tool
 class think_creatively:
-    """Launch a special sub-agent configured to produce much more varied and creative thoughts. This sub-agent's output is likely to be somewhat insane. It does not have access to texts and files, it can just respond to your prompt. Helpful for open-ended ideation and breaking out of repetitive loops. Note that the creative agent has a tendency to ramble at length and ignore grammatical coherence... it's kinda a mad prophet"""
-    topic: str = toolprop(desc="A suggested topic for the sub-agent to muse on.")
+    """Launch a creative sub-agent for open-ended ideation.
+    Its output may be somewhat insane — a mad prophet."""
+    topic: str = toolprop(desc="A topic for the sub-agent to muse on.")
 
     def handler(agent, session, args):
         session.push()
         session.topic = args.topic
         session.set_mode("creative")
+        session.messages.append({
+            "role": "user",
+            "content": f"Topic for creative exploration: {args.topic}"
+        })
+        return f"Launched creative sub-agent on: {args.topic}"
 
+
+@tool
 class creative_thought:
-    thought: str = toolprop(desc="Your new thought")
+    """Record the output of your creative thinking sub-agent."""
+    thought: str = toolprop(desc="Your creative thought")
 
     def handler(agent, session, args):
         session.pop()
-        session.thoughts.append("Invoked my creative thinking sub-agent: " + args.thought)
+        return f"Creative thought: {args.thought}"
+
 
 @tool
 class think_critically:
-    """Launch a special sub-agent configured to give you critical feedback."""
+    """Launch a critical feedback sub-agent."""
 
     def handler(agent, session, args):
         session.push()
         session.set_mode("critical")
+        session.messages.append({
+            "role": "user",
+            "content": "Provide critical feedback on the current situation."
+        })
+        return "Launched critical thinking sub-agent."
+
 
 @tool
 class criticize:
@@ -170,5 +224,15 @@ class criticize:
 
     def handler(agent, session, args):
         session.pop()
-        session.thoughts.append("Invoked my critical thinking sub-agent: " + args.criticism)
+        return f"Critical feedback: {args.criticism}"
+
+
+@tool
+class post:
+    """Publish a short message."""
+    post: str = toolprop(desc="no more than 300 characters")
+
+    def handler(agent, session, args):
+        # TODO: actual posting integration
+        return f"Posted: {args.post}"
 
