@@ -482,6 +482,18 @@ export async function main() {
         addGroup({ title: 'Group A' }, true);
     }
 
+    function exitTool() {
+        const target = topmost.parentNode;
+        target.replaceChildren();
+        $apply("layout/nothing", target);
+    }
+
+    topmost.$contextMenu = {
+        items: [
+            ["exit", exitTool]
+        ]
+    };
+
     return {
         dom: [topmost],
         replace: true

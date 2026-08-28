@@ -5,7 +5,8 @@ from pyt.core.llm.tools.agent import *
 from pyt.core.llm.tools.files import *
 from pyt.core.llm.tools.sandbox import *
 from pyt.core.llm.tools.collect import collect_source
-from pyt.core.llm.tools.vision import describe_image
+from pyt.core.llm.tools.vision import describe_image, look_at_image
+from pyt.core.llm.tools.mailbox import send_operator_message, wait_for_operator
 
 _chatlogs = Path(__file__).parent / "chatlog"
 
@@ -59,16 +60,24 @@ class WorkerMode(AgentMode):
             finish_work,
             collect_source,
             launch_worker,
-            refine_log,
+            compact_context,
             send_input,
             interrupt_command,
             wait_for_command,
             kill_command,
             restart_bash_session,
             discard_command,
-            describe_image,
+            send_operator_message,
+            wait_for_operator,
             refusal
         ]
+
+        # a vision-capable model looks at images itself; anything else
+        # outsources to a vision model
+        if agent.get("has_vision"):
+            tools.append(look_at_image)
+        else:
+            tools.append(describe_image)
 
         return tools
 

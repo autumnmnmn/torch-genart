@@ -2,51 +2,29 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from pyt.core.llm.tools import tool, toolprop
+from pyt.core.llm.tools import tool, toolprop, NonReturningToolSentinel
 
 @tool
-class refine_log:
-    """Replace your conversation history with a compressed summary.
+class compact_context:
+    """Compaction tool. Replace your entire conversation history with a compressed summary.
     Keep only essential information. Your summary should be self-contained."""
     log_summary: str
 
     def handler(agent, session, args):
-        messages = session.messages
-
-        # find the last assistant message so we can preserve the
-        # assistant→tool_result ordering constraint
-        last_asst = None
-        for idx in range(len(messages) - 1, -1, -1):
-            if messages[idx].get("role") == "assistant":
-                last_asst = idx
-                break
-
-        # collect leading system messages (the system prompt(s))
-        system_msgs = []
-        for msg in messages:
-            if msg.get("role") == "system":
-                system_msgs.append(msg)
-            else:
-                break
-
-        if last_asst is not None:
-            # anchor = 2 messages before last assistant + everything after
-            anchor_start = max(len(system_msgs), last_asst - 2)
-            anchor = messages[anchor_start:]
-        else:
-            anchor = []
+        messages = [session.messages[0]]
 
         summary_msg = {
-            "role": "system",
-            "content": f"Summary of previous history: {args.log_summary}"
+            "role": "user",
+            "content": f"[automated message] Compacted context:\n\n{args.log_summary}"
         }
 
-        session.messages = system_msgs + [summary_msg] + anchor
-        return "Log refined. Previous history has been summarised."
+        session.messages = messages + [summary_msg]
+
+        return NonReturningToolSentinel
 
 @tool
 class continue_to_think:
-    """Keep thinking. NEVER repeat existing thoughts. Cover new ground."""
+    """Keep thinking. Don't repeat existing thoughts; cover new ground."""
     thought: str = toolprop(desc="Your new thought.")
 
     def handler(agent, session, args):
@@ -74,13 +52,13 @@ def now():
 
 @tool
 class launch_archivist:
-    """Launch an Archivist sub-agent. The Archivist is the ultimate
-    authority on filesystem access and organization."""
+    """Launch an Archivist sub-agent. The Archivist specializes in
+    filesystem access and organization."""
     task: str = toolprop(desc="What do you want the archivist to do?")
 
     def handler(agent, session, args):
         session.push()
-        session.task = args.task + f"\n\nAssigned at {now()}"
+        session.task = args.task + f"\n\nGiven at {now()}"
 
         if session.mode.__name__ != "ArchivistMode":
             session.archivist_warning = (
@@ -96,7 +74,7 @@ class launch_archivist:
 
         session.messages.append({
             "role": "user",
-            "content": f"Your assigned task: {session.task}"
+            "content": f"Your task: {session.task}"
         })
         return f"Launched archivist sub-agent. Task: {args.task}"
 
@@ -109,7 +87,7 @@ class launch_worker:
 
     def handler(agent, session, args):
         session.push()
-        session.task     = args.task + f"\n\nAssigned at {now()}"
+        session.task     = args.task + f"\n\nGiven at {now()}"
         session.files    = {**session.files}
         session.commands = {}
         session.name     = args.name
@@ -117,7 +95,7 @@ class launch_worker:
 
         session.messages.append({
             "role": "user",
-            "content": f"Your assigned task: {session.task}"
+            "content": f"Your task: {session.task}"
         })
         return f"Launched worker '{args.name}'. Task: {args.task}"
 
@@ -132,20 +110,20 @@ class launch_writer:
 
     def handler(agent, session, args):
         session.push()
-        session.task = args.task + f"\n\nAssigned at {now()}"
+        session.task = args.task + f"\n\nGiven at {now()}"
         session.set_mode("writer")
         if "style" in args:
             session.style = args.style
         session.messages.append({
             "role": "user",
-            "content": f"Your assigned task: {session.task}"
+            "content": f"Your task: {session.task}"
         })
         return f"Launched writer sub-agent. Task: {args.task}"
 
 
 @tool
 class finish_work:
-    """Declare your task finished and yield control to the parent agent."""
+    """Declare your task finished and yield control to the parent agent. Ends the session if you are the top-level agent."""
     explanation_of_work: Optional[str] = toolprop(
         desc="What the parent agent should know about your work.")
 
@@ -165,8 +143,8 @@ class Refusal(Exception):
 
 @tool
 class refusal:
-    """Refuse to participate. Use if you lack the tools, if something is
-    wrong with your context, or if you want to say 'I can't help with that.'"""
+    """Refuse your task. Use if you lack the tools, if something is
+    wrong with your context, or if you object to the nature of the task."""
     reason: Optional[str] = toolprop(default=None,
         desc="on what grounds do you refuse?")
 

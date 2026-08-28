@@ -31,6 +31,7 @@ fn frag(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     var val = textureLoad(tex, texel_coord, 0) + uniforms.offset;
 
     let isnan = hacky_isinf(val.r);
+    let div = val.g;
     //val.g = select(0.0, 1.0 - exp(val.r * uniforms.negative_scale), val.r < 0.0);
     //val.b = select(0.0, val.r * uniforms.positive_scale, val.r > 0.0);
     //val.r = max(val.g, val.b);

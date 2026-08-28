@@ -36,7 +36,11 @@ def _log(tag, content, mode, indent, use_a11y_tags):
 
 def _input(prompt, mode, indent):
     tag_color = ac.ansi(ac.fg("magenta"))
-    return input(f"{tag_color}{' '*indent}{prompt} {ac.reset}")
+    reset = ac.reset
+    if "readline" in sys.modules and sys.stdin.isatty() and sys.stdout.isatty():
+        tag_color = f"\001{tag_color}\002"
+        reset = f"\001{reset}\002"
+    return input(f"{tag_color}{' '*indent}{prompt} {reset}")
 
 @dataclass(frozen=True)
 class Logger:

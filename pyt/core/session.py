@@ -7,6 +7,7 @@ from pathlib import Path
 from pyt.core.terminal.ansi import codes as ac
 from pyt.core import AttrDict, lsnap
 from pyt.core.commands import registrar_attr, register_builtins
+from pyt.core.websocket import WebsocketServer
 
 def _find_pytrc():
     config_home = os.getenv("XDG_CONFIG_HOME")
@@ -71,6 +72,8 @@ class PytSession:
 
         self._get_paths()
 
+        self.socket = WebsocketServer(self.log.tag("socket"))
+
         from pyt.core.terminal import persona
         self.persona = persona.Persona.from_config(persona.default) # TODO configurable
 
@@ -88,6 +91,13 @@ class PytSession:
 
         self.log(f"{self.persona.hello()} {username}! {self.persona.smile()}" if username else f"{self.persona.hello()}! {self.persona.smile()}")
         self.log.blank()
+
+    def injected_state(self):
+        return {
+            **self.persistent_state,
+            "send": self.socket.send,
+            "receive": self.socket.receive
+        }
 
     def _get_paths(self):
         # priority order: cli > pytrc > env > default

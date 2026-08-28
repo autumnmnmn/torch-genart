@@ -206,7 +206,7 @@ def _at_box(session, args):
     _run(session, "at-box", parts)
 
 
-@_builtin("in-box", "inbox", "ib")
+@_builtin("in-env", "inbox", "ib")
 def _in_box(session, args):
     """Launch an agent process with one or more boxes bound into its home.
 
@@ -221,7 +221,7 @@ def _in_box(session, args):
     """
     parts = _split_args(args)
     resolved = _resolve_faves(session, parts, positional_mode="none")
-    _run(session, "in-box", resolved)
+    _run(session, "in-env", resolved)
 
 
 @_builtin("peek")
@@ -322,7 +322,7 @@ def _collect(session, args):
 def _agent(session, args):
     """Manage agent profiles or launch an agent in a box.
 
-    Subcommands: register, unregister, list, or <name> <box_spec> [command...]
+    Subcommands: register, unregister, list, or <name> [command...]
     """
     parts = _split_args(args)
     _run(session, "agent", parts)

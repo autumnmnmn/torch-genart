@@ -2,14 +2,18 @@
 
 Image paths are resolved INSIDE the agent's snapbox: the handler enters the
 box with in-box(1) and pumps the file back over stdout as base64 between
-sentinel lines, so any path the agent can see in its sandbox works and stray
-wrapper noise on the stream cannot silently corrupt the image. Path
-resolution anchors at the box home — the spawn's working directory, which is
-where in-box always binds the home content ($HOME itself proved unreliable
-in --pipe spawns, and absolute paths under <snapbox_root>/runs/<home>/ are
-meaningless across spawns, so both are rebased onto the box home). When the
-session has no box_spec (unsandboxed use, e.g. tests) the path is read from
-the local filesystem directly.
+sentinel lines, so stray wrapper noise on the stream cannot silently corrupt
+the image. Path resolution anchors at the box home — the spawn's working
+directory, which is where in-box always binds the home content. The pump
+runs in a FRESH sibling environment: it has the same content as the agent's
+environment, but not the same absolute path layout ($HOME proved unreliable
+in --pipe spawns, and a sibling's view of absolute paths such as
+<snapbox_root>/runs/<home>/... is a bare tmpfs — binds live in the owning
+spawn's mount namespace). The agent-facing contract is therefore
+deliberately narrow: a relative path resolved from the agent's home
+directory. ~- and home-absolute spellings are still normalized onto the box
+home as a courtesy, but the tool descriptions promise only the
+relative-from-home form.
 
 The bytes are downscaled via imagemagick on the harness side and sent to a
 chat-completions vision model, returning either a thorough general description
@@ -41,13 +45,13 @@ from pyt.core.llm.tools.images import (
     image_content_entry, bytes_content_entry, media_type_for_extension,
 )
 
-__all__ = ["describe_image"]
+__all__ = ["describe_image", "look_at_image"]
 
 API = os.environ.get("OPENROUTER_API_BASE", "https://openrouter.ai/api")
 VISION_MODEL = os.environ.get("WHIM_VISION_MODEL",
                               "qwen/qwen3-vl-235b-a22b-instruct")
 VISION_PROVIDER = os.environ.get("WHIM_VISION_PROVIDER")
-IN_BOX = os.environ.get("WHIM_IN_BOX", "/usr/local/bin/in-box")
+IN_BOX = os.environ.get("WHIM_IN_BOX", "/usr/local/bin/in-env")
 # Host constant of the snapbox installation; absolute paths under
 # <root>/runs/<home>/ are rebased onto the box home by the pump.
 SNAPBOX_ROOT = os.environ.get("WHIM_SNAPBOX_ROOT", "/snapbox")
@@ -91,6 +95,10 @@ case $f in
     __ROOT__/runs/*/*)
         f=$(pick "$f" "./${f#__ROOT__/runs/*/}") ;;
 esac
+if [ -d "$f" ]; then
+    echo "describe_image: path is a directory, not an image file: $1 (resolved: $f)" >&2
+    exit 3
+fi
 if [ ! -f "$f" ]; then
     echo "describe_image: no such file in box: $1 (resolved: $f)" >&2
     exit 3
@@ -132,9 +140,9 @@ def _extract_payload(stdout: bytes) -> bytes:
                          "(payload is not valid base64)")
 
 
-def _pump_from_box(box_spec, agent_name, path_str) -> bytes:
+def _pump_from_box(agent_name, path_str) -> bytes:
     """Read *path_str* out of the agent's snapbox via in-box(1)."""
-    cmd = [IN_BOX, box_spec]
+    cmd = [IN_BOX]
     if agent_name:
         cmd += ["--as", str(agent_name)]
     cmd += ["--no-pty", "--quiet", "--",
@@ -252,6 +260,70 @@ QUESTION_PROMPT = (
     "Question(s):\n{question}"
 )
 
+def _normalize_box_path(path_str):
+    """Rewrite ~ and box-home-absolute paths to box-relative form.
+
+    The pump runs with its CWD set to the agent's box home, so a plain
+    relative path means "inside the box home". A leading-~ path and a
+    /snapbox/runs/<home>/... path are the same thing spelled differently;
+    normalize them here because the in-box/systemd-run argument chain mangles
+    a literal leading '~' (observed live: the pump resolved '~/x' as '.',
+    firing its '~'-only branch). A plain relative path is proven to survive
+    the chain intact.
+    """
+    if path_str == "~":
+        return "."
+    if path_str.startswith("~/"):
+        return "./" + path_str[2:]
+    prefix = SNAPBOX_ROOT.rstrip("/") + "/runs/"
+    if path_str.startswith(prefix):
+        parts = path_str.split("/")
+        # parts == ['', 'snapbox', 'runs', '<home>', <rest...>]
+        if len(parts) >= 5:
+            rest = "/".join(parts[4:])
+            return ("./" + rest) if rest else "."
+    return path_str
+
+
+def _load_image_entry(session, path_str, maxdim):
+    """Read + downscale an image. Returns
+    (content_entry, None) or (None, agent-facing error string)."""
+
+    # Sandboxed: pull the bytes out of the agent's own box, so paths
+    # mean exactly what they mean in the agent's command shell.
+    path_str = _normalize_box_path(path_str.strip())
+    media_type = media_type_for_extension(Path(path_str).suffix)
+    try:
+        raw = _pump_from_box(session.get("snapbox_name"),
+                             path_str)
+    except _PumpNotFound as e:
+        return None, (f"Error: no image file inside your sandbox: {e}. "
+                      f"Paths are resolved relative to your sandbox "
+                      f"home — absolute paths do not work there the "
+                      f"way they do in your shell. Check with "
+                      f"run_command that the file exists.")
+    except _PumpError as e:
+        return None, f"Error: could not read image from your sandbox: {e}"
+    if not raw:
+        return None, f"Error: image file at {path_str!r} is empty"
+
+    try:
+        entry = bytes_content_entry(
+            raw, imagemagick_args=["-resize", f"{maxdim}x{maxdim}>"])
+    except Exception:
+        # imagemagick unavailable/failed — send the raw bytes
+        if media_type is None:
+            return None, (f"Error: unsupported image extension "
+                          f"{Path(path_str).suffix!r} and imagemagick "
+                          f"could not convert it")
+        try:
+            entry = bytes_content_entry(raw, media_type)
+        except Exception as e:
+            return None, f"Error: could not encode {path_str}: {e}"
+
+    return entry, None
+
+
 @tool
 class describe_image:
     """Get a detailed description of an image from a vision-capable model.
@@ -262,17 +334,21 @@ class describe_image:
     from it for mathematical work. Omit `question` for a thorough general
     description, or provide it to ask something specific.
 
-    The path is resolved inside YOUR sandbox, exactly as your command shell
-    sees it (absolute sandbox path, ~, or relative to your sandbox home).
+    The path is resolved inside YOUR sandbox relative to your home
+    directory: pass a plain relative path from home (e.g. plots/fig1.png).
+    Do NOT pass an absolute path — the image is read in a fresh environment
+    that has the same files as yours but not the same absolute layout, so
+    an absolute path does not mean there what it means in your shell.
 
     Transient API failures are already retried internally with backoff; if
     this tool returns an error, do NOT call it again right away — continue
     with other work and try again later."""
 
     path: str = toolprop(
-        desc="Path to the image file (png, jpg, gif, webp). Resolved inside "
-             "your sandbox: an absolute sandbox path, ~/..., or a path "
-             "relative to your sandbox home.")
+        desc="Path to the image file (png, jpg, gif, webp), relative to "
+             "your sandbox home (e.g. plots/fig1.png). Absolute paths are "
+             "unreliable here — use a relative path from home.")
+
     question: Optional[str] = toolprop(default=None,
         desc="Specific question(s) about the image. Omit for a detailed "
              "general description.")
@@ -280,57 +356,17 @@ class describe_image:
         desc=f"Downscale so the longest side is at most this many pixels "
              f"before sending (default {DEFAULT_MAX_DIMENSION}).")
 
+    # A single vision API attempt can take well over 10s (big VL model), and
+    # this tool's result is usually exactly what the agent is waiting for, so
+    # let run_with_timeout wait synchronously through one attempt instead of
+    # detaching immediately and surfacing the answer only on a later step.
+    sync_timeout = 190
+
     def handler(agent, session, args):
         maxdim = int(args.get("max_dimension") or DEFAULT_MAX_DIMENSION)
-        box_spec = session.get("box_spec") if hasattr(session, "get") else None
-
-        if box_spec:
-            # Sandboxed: pull the bytes out of the agent's own box, so paths
-            # mean exactly what they mean in the agent's command shell.
-            path_str = str(args.path).strip()
-            media_type = media_type_for_extension(Path(path_str).suffix)
-            try:
-                raw = _pump_from_box(box_spec, session.get("snapbox_name"),
-                                     path_str)
-            except _PumpNotFound as e:
-                return (f"Error: no image file inside your sandbox: {e}. "
-                        f"Paths resolve as your shell sees them (absolute "
-                        f"sandbox path, ~, or relative to your sandbox "
-                        f"home) — check with run_command that the file "
-                        f"exists.")
-            except _PumpError as e:
-                return f"Error: could not read image from your sandbox: {e}"
-            if not raw:
-                return f"Error: image file at {path_str!r} is empty"
-
-            try:
-                entry = bytes_content_entry(
-                    raw, imagemagick_args=["-resize", f"{maxdim}x{maxdim}>"])
-            except Exception:
-                # imagemagick unavailable/failed — send the raw bytes
-                if media_type is None:
-                    return (f"Error: unsupported image extension "
-                            f"{Path(path_str).suffix!r} and imagemagick "
-                            f"could not convert it")
-                try:
-                    entry = bytes_content_entry(raw, media_type)
-                except Exception as e:
-                    return f"Error: could not encode {path_str}: {e}"
-        else:
-            # No box on this session: read from the local filesystem directly.
-            path = Path(str(args.path).strip()).expanduser()
-            if not path.is_file():
-                return f"Error: no image file at {path}"
-
-            try:
-                entry = image_content_entry(
-                    path, imagemagick_args=["-resize", f"{maxdim}x{maxdim}>"])
-            except Exception:
-                # imagemagick unavailable/failed — send the raw file
-                try:
-                    entry = image_content_entry(path)
-                except Exception as e:
-                    return f"Error: could not encode {path}: {e}"
+        entry, error = _load_image_entry(session, str(args.path), maxdim)
+        if error:
+            return error
 
         question = args.get("question")
         text = (QUESTION_PROMPT.format(question=question)
@@ -348,3 +384,53 @@ class describe_image:
         if not content:
             return f"Error: vision model returned no content: {str(response)[:500]}"
         return content
+
+
+@tool
+class look_at_image:
+    """Put an image directly into your own context so YOU can see it.
+
+    Use whenever you have rendered or saved an image (plot, diagram, fractal,
+    simulation frame, ...) and need to know what it actually contains — e.g.
+    to verify a figure matches your intent, or to extract precise information
+    from it for mathematical work. The image shows up as a user message right
+    after this tool round; from then on it is simply part of your context and
+    you can reason about it yourself.
+
+    The path is resolved inside YOUR sandbox relative to your home
+    directory: pass a plain relative path from home (e.g. plots/fig1.png).
+    Do NOT pass an absolute path — the image is read in a fresh environment
+    that has the same files as yours but not the same absolute layout, so
+    an absolute path does not mean there what it means in your shell."""
+
+    path: str = toolprop(
+        desc="Path to the image file (png, jpg, gif, webp), relative to "
+             "your sandbox home (e.g. plots/fig1.png). Absolute paths are "
+             "unreliable here — use a relative path from home.")
+    max_dimension: Optional[int] = toolprop(default=None,
+        desc=f"Downscale so the longest side is at most this many pixels "
+             f"first (default {DEFAULT_MAX_DIMENSION}).")
+
+    # Same box pump as describe_image (but no downstream API call), so the
+    # same generous synchronous window applies.
+    sync_timeout = 190
+
+    def handler(agent, session, args):
+        maxdim = int(args.get("max_dimension") or DEFAULT_MAX_DIMENSION)
+        path_str = str(args.path).strip()
+        entry, error = _load_image_entry(session, path_str, maxdim)
+        if error:
+            return error
+
+        # Deferred insertion: the worker appends this as a user message only
+        # after the whole tool-result block, so strict assistant→tool
+        # ordering holds no matter how many calls share the round.
+        caption = (f"[automated message] image from look_at_image: "
+                   f"{path_str}")
+        pending = session.setdefault("pending_images", [])
+        pending.append({
+            "role": "user",
+            "content": [entry, {"type": "text", "text": caption}],
+        })
+        return (f"Image {path_str!r} placed into context — it appears as a "
+                f"user message right after this tool round.")

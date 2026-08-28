@@ -191,6 +191,8 @@ def _python_stateful(session):
     state["print"] = log.tag("python")
     state["_print"] = print
 
+    state.update(session.injected_state())
+
     from pyt.core.terminal.pywrapl import repl
 
     # TODO on_version_mismatch from pytrc

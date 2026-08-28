@@ -9,6 +9,8 @@ from typing import Any, Optional, List, Dict
 
 from pyt.core.llm.chatlog import AttrDict, chatEntry, load_chatlog
 
+NonReturningToolSentinel = object()
+
 def _sanitize_messages(messages):
     """Return a copy of *messages* enforcing strict OpenAI tool-message ordering
     (some providers, e.g. Moonshot, 400 on violations). Repairs, without mutating

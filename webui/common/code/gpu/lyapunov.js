@@ -208,7 +208,7 @@ export async function main() {
         if (document.fullscreenElement) {
             document.exitFullscreen();
         }
-        const target = renderStack.parentNode;
+        const target = topmost.parentNode;
         target.replaceChildren();
         $apply("layout/nothing", target);
     }
@@ -254,7 +254,7 @@ export async function main() {
 
         const texture = $gpu.device.createTexture({
             size: [dims.x, dims.y],
-            format: "r32float",
+            format: "rg32float",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
 
@@ -348,7 +348,7 @@ export async function main() {
 
         outputTexture = $gpu.device.createTexture({
             size: [width, height],
-            format: "r32float",
+            format: "rg32float",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
 
@@ -422,7 +422,7 @@ export async function main() {
         $gpu.device.queue.submit([commandEncoder.finish()]);
     }
 
-    renderStack.$contextMenu = {
+    topmost.$contextMenu = {
         items: [
             () => setControlDisplayState("block"),
             ["save frame", saveFrame],

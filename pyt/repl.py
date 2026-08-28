@@ -1,15 +1,12 @@
 
 import os
+import readline
 
 from argparse import ArgumentParser
 
 from pyt.core import PytSession
 from pyt.core.terminal import persona
 
-try:
-    import readline
-except ImportError:
-    pass
 
 def main():
     parser = ArgumentParser("snakepyt")

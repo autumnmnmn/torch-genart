@@ -164,23 +164,53 @@ class CIEXYZ { // CIE 1931 XYZ
     }
 }
 
-// A color derived from one of the CSS theme variables
-// Scoped to a particular element, as is the theming system
-class ThemeColor {
-    constructor(name, element) {
-        this.name = name;
-        // TODO reader = new div;
-        // make the div size 0x0 w/ display & position set such that it doesnt disrupt document flow, declare it aria-hidden
-        // register a finalization registry entry for `this` that detaches the reader element
-        // & finally set the reader element's background color to `var(--${name})`
-        //this.reader = reader;
+class CssColor {
+    #cssString;
+    #reader;
+
+    constructor(cssString, element) {
+        this.#cssString = cssString;
+
+        if (element.$cssColorReader) {
+            this.#reader = element.$cssColorReader;
+        } else {
+            this.#reader = $div("css-color-reader");
+            element.$cssColorReader = this.#reader;
+
+            this.#reader.style.width = "0";
+            this.#reader.style.height = "0";
+            this.#reader.style.position = "absolute";
+            this.#reader.style.display = "block";
+
+            this.#reader.setAttribute("aria-hidden", "true");
+
+            element.appendChild(this.#reader);
+        }
+
+        // finally set the reader element's background color to `cssString`
+        this.#reader.style.backgroundColor = cssString;
     }
 
-    // setter for `name` that updates the reader's css
+    // setter for `cssString` that updates the reader's css
+    set cssString(value) {
+        this.#cssString = value;
+        this.#reader.style.backgroundColor = value;
+    }
+
+    get cssString() {
+        return this.#cssString;
+    }
 
     to_nonlinear_srgb() {
-        //const style = getComputedStyle(this.reader);
-        // TODO conversion via reading computed css of `var(--${name})` at the element :3
+        const computed = getComputedStyle(this.#reader).backgroundColor;
+
+        const nums = computed.match(/[\d.]+/g);
+
+        return new NonlinearSRGB({
+            red:   parseFloat(nums[0]) / 255,
+            green: parseFloat(nums[1]) / 255,
+            blue:  parseFloat(nums[2]) / 255
+        });
     }
 }
 
@@ -224,7 +254,7 @@ const _CONVERSION_EDGES = new Map([
     [CIEXYZ, [
         [LinearSRGB, x => x.to_linear_srgb()],
     ]],
-    [ThemeColor, [
+    [CssColor, [
         [NonlinearSRGB, x => x.to_nonlinear_srgb()]
     ]]
 ]);
@@ -287,13 +317,14 @@ class Color {
     #oklab = null;
     #oklch = null;
     #cie_xyz = null;
+    #css_color = null;
 
     // TODO (eventually) (maybe)
     // relative transformations with provenance-chain tracking;
 
     constructor(value) {
         this.#source = value.constructor;
-        this.#setSlot(this.#sourceType, value);
+        this.#setSlot(this.#source, value);
     }
 
     #getSlot(type) {
@@ -303,7 +334,7 @@ class Color {
             case OkLab:         return this.#oklab;
             case OkLch:         return this.#oklch;
             case CIEXYZ:        return this.#cie_xyz;
-            case ThemeColor:    return this.#theme_color;
+            case CssColor:      return this.#css_color;
             default:            return undefined;
         }
     }
@@ -315,7 +346,7 @@ class Color {
             case OkLab:         this.#oklab = value;          break;
             case OkLch:         this.#oklch = value;          break;
             case CIEXYZ:        this.#cie_xyz = value;        break;
-            case ThemeColor:    this.#theme_color = value;    break;
+            case CssColor:      this.#css_color = value;      break;
         }
     }
 
@@ -337,6 +368,7 @@ class Color {
         this.#oklab = null;
         this.#oklch = null;
         this.#cie_xyz = null;
+        this.#css_color = null;
 
         this.#source = value.constructor;
         this.#setSlot(this.#source, value);

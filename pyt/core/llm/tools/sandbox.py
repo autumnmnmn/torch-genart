@@ -11,13 +11,27 @@ from datetime import datetime
 from typing import Literal, Optional, List
 
 from pyt.core.llm.tools import tool, toolprop
+from pyt.core.llm.tools import mailbox
 
 date_fmt = "%d.%m.%Y t%H.%M.%S"
 
+def _wrap_command(command, marker):
+    """Wrap *command* with START/END sentinels.
+
+    The END sentinel must capture the command's exit status. It uses double
+    quotes (not single) so bash expands $?; single quotes would emit a
+    literal "$?" and the exit code would be lost.
+    """
+    return (
+        f" echo '___START_{marker}___'\n"
+        f"{command}"
+        f' echo "___END_{marker}_$?___"\n'
+    )
+
+
 class BashSession:
-    def __init__(self, agent_name, box_spec):
+    def __init__(self, agent_name):
         self.agent_name = agent_name
-        self.box_spec = box_spec
         self.stdout_content = ""
         self.stderr_content = ""
         self.stdin_content = ""
@@ -41,8 +55,7 @@ class BashSession:
         self.start_time = datetime.now()
 
         cmd = [
-            "/usr/local/bin/in-box",
-            self.box_spec,
+            "/usr/local/bin/in-env",
             "--as", self.agent_name,
             "--capability", "gpu",
             "--no-pty",
@@ -83,11 +96,7 @@ class BashSession:
             self.stdin_content = command
 
         # Notice the leading spaces! Bash will not record these in history.
-        wrapped = (
-            f" echo '___START_{self.current_marker}___'\n"
-            f"{command}"
-            f" echo '___END_{self.current_marker}_$?___'\n"
-        )
+        wrapped = _wrap_command(command, self.current_marker)
 
         if self._process and self._process.stdin:
             self._process.stdin.write(wrapped.encode())
@@ -146,10 +155,19 @@ class BashSession:
             err = self.stderr_content
             _in = self.stdin_content
 
-        # Strip the boundary markers from the output sent to the agent
+        # Strip the boundary markers from the PERSISTENT buffer, not just the
+        # returned copy, so later renders (the command monitor's per-step
+        # render, and wait_for_command) are clean too. The END marker's exit
+        # code has already been captured above.
         if self.current_marker:
-            out = re.sub(rf"___START_{self.current_marker}___\r?\n?", "", out)
-            out = re.sub(rf"___END_{self.current_marker}_\d+___\r?\n?", "", out)
+            with self._lock:
+                self.stdout_content = re.sub(
+                    rf"___START_{self.current_marker}___\r?\n?", "",
+                    self.stdout_content)
+                self.stdout_content = re.sub(
+                    rf"___END_{self.current_marker}_\d+___\r?\n?", "",
+                    self.stdout_content)
+                out = self.stdout_content
 
             if self.command_status == "finished":
                 self.current_marker = None
@@ -164,9 +182,8 @@ class BashSession:
 
 
 class IsolatedCommand:
-    def __init__(self, agent_name, box_spec, command, extra_args):
+    def __init__(self, agent_name, command, extra_args):
         self.agent_name = agent_name
-        self.box_spec = box_spec
         self.command = command
         self.extra_args = extra_args
         self.stdout_content = ""
@@ -189,8 +206,7 @@ class IsolatedCommand:
         self.start_time = datetime.now()
 
         cmd = [
-            "/usr/local/bin/in-box",
-            self.box_spec,
+            "/usr/local/bin/in-env",
             "--as", self.agent_name,
             "--capability", "gpu",
             *self.extra_args,
@@ -258,14 +274,77 @@ class IsolatedCommand:
         )
 
 
+def _run_isolated(session, command, extra_args):
+    """Allocate an index, start the isolated command, render the first moments.
+
+    Shared by the plain isolated path and the operator-approved capability
+    path so both register and render commands identically.
+    """
+    idx = session.get("next_command_index", 1)
+    session.next_command_index = idx + 1
+    cmd = IsolatedCommand(session.snapbox_name, command,
+                          extra_args)
+    session.commands[idx] = cmd
+    cmd.run()
+    return idx, cmd.render(idx, timeout=5.0)
+
+
+def _capability_approval(session, command, requested, justification):
+    """Ask the operator to approve elevated capabilities via the mail window.
+
+    Blocks until the operator types ``approve <id>`` / ``deny <id>`` in the
+    mail monitor. There is no expiry by default: the operator is not always
+    at the keyboard, and ``run_with_timeout`` detaches the handler after the
+    tool's sync timeout and delivers the eventual result asynchronously, so
+    the agent keeps working on other things while the request stays pending
+    and the command runs automatically whenever approval arrives — possibly
+    hours later. WHIM_APPROVAL_TIMEOUT can configure a finite wait.
+    """
+    request_id = mailbox.submit_capability_request(command, requested,
+                                                   justification)
+    timeout = mailbox.approval_timeout()
+    decision, note = mailbox.poll_approval(request_id, timeout)
+
+    if decision is None:
+        # Only reachable with a finite WHIM_APPROVAL_TIMEOUT configured.
+        return (f"Capability request {request_id} for "
+                f"[{', '.join(requested)}] received no operator decision "
+                f"within {timeout:.0f}s and was abandoned. The command was "
+                f"NOT run. Re-request when the operator is watching, or ask "
+                f"them to grant the capability statically in your agent "
+                f"profile.")
+
+    if decision == "deny":
+        return (f"Capability request {request_id} for "
+                f"[{', '.join(requested)}] was DENIED by the operator"
+                + (f": {note}" if note else "")
+                + ". The command was NOT run.")
+
+    # Approved: run exactly like the normal isolated path, but with the
+    # granted capabilities.
+    extra_args = []
+    for cap in requested:
+        extra_args.extend(["--capability", cap])
+
+    idx, rendered = _run_isolated(session, command, extra_args)
+
+    heading = (f"[approved] Capability request {request_id} granted by operator"
+               + (f": {note}" if note else ""))
+    return f"{heading}\n\n{rendered}"
+
+
 @tool
 class run_command:
     """Run a bash command. By default, this runs in your continuous in-box'd bash session (Index 0).
     You can optionally run it in a fresh, isolated shell that only exists for this command.
-    Isolated commands can request elevated capabilities (network, gui) which will block on user approval."""
+    Isolated commands can request elevated capabilities (network, gui). A request is
+    queued for autumn's approval along with your justification; it stays pending until
+    autumn answers (there is no expiry by default), you keep working on other
+    things meanwhile, and the command runs automatically once approved."""
     command: str = toolprop(desc="The bash command to run.")
     isolated: Optional[bool] = toolprop(default=False, desc="Run in a fresh, isolated shell. Default is false.")
     capabilities: Optional[List[str]] = toolprop(default_factory=list, desc="List of extra capabilities. Options: 'network', 'gui'. Only valid if isolated=True.")
+    justification: Optional[str] = toolprop(default=None, desc="Required when requesting capabilities: a short due-diligence brief, in your own words. Explain what this command is trying to do, which concerns are relevant to it (e.g. rate limits, robots.txt / terms of service, bot detection or access controls, whether the destination welcomes LLM-generated contributions, private-data egress, destructive potential), and why you are confident it should proceed. Autumn reads this to decide, so keep it honest.")
 
     def handler(agent, session, args):
         is_isolated = args.get("isolated", False)
@@ -275,39 +354,49 @@ class run_command:
             caps = args.get("capabilities", [])
             requested = [cap for cap in caps if cap in ["network", "gui"]]
 
-            # No interactive terminal in headless workers: deny cleanly instead of
-            # crashing on session.log.input().
-            if requested and not hasattr(session, "log"):
-                return (f"Capability request denied: no interactive terminal is "
-                        f"available for operator approval in this sandbox. "
-                        f"Requested: {', '.join(requested)}. Run the command "
-                        f"without requesting capabilities, or have the operator "
-                        f"grant them statically in the agent profile.")
-
-            denied = []
-            for cap in requested:
-                # Block on user input directly using the terminal logger
-                ans = session.log.input(f"Agent requests '{cap}' capability for isolated command:\n`{args.command}`\nApprove? [y/N]: ")
-                if ans.lower().strip() == 'y':
-                    extra_args.extend(["--capability", cap])
+            if requested:
+                justification = (args.get("justification") or "").strip()
+                if not justification:
+                    return ("Capability requests must include a "
+                            "`justification`: a short due-diligence brief, "
+                            "in your own words, covering (1) what this "
+                            "command is trying to do, (2) which concerns are "
+                            "relevant to it (rate limits, robots.txt / terms "
+                            "of service, bot detection or access controls, "
+                            "whether the destination welcomes LLM-generated "
+                            "contributions, private-data egress, destructive "
+                            "potential), and (3) why you are confident it "
+                            "should be approved. Autumn reads it to "
+                            "decide. The command was NOT run — re-issue the "
+                            "request with the justification filled in.")
+                if hasattr(session, "log"):
+                    # Interactive terminal: block on the operator directly.
+                    denied = []
+                    for cap in requested:
+                        ans = session.log.input(
+                            f"Agent requests '{cap}' capability for isolated "
+                            f"command:\n`{args.command}`\n"
+                            f"Agent's justification: {justification}\n"
+                            f"Approve? [y/N]: ")
+                        if ans.lower().strip() == 'y':
+                            extra_args.extend(["--capability", cap])
+                        else:
+                            denied.append(cap)
+                    if denied:
+                        return (f"Execution aborted. User denied requested "
+                                f"capabilities: {', '.join(denied)}")
                 else:
-                    denied.append(cap)
+                    # Headless worker: no terminal. Submit a request through
+                    # the mail monitor window and wait for a decision.
+                    return _capability_approval(session, args.command,
+                                                requested, justification)
 
-            if denied:
-                return f"Execution aborted. User denied requested capabilities: {', '.join(denied)}"
-
-            idx = session.get("next_command_index", 1)
-            session.next_command_index = idx + 1
-
-            cmd = IsolatedCommand(session.snapbox_name, session.box_spec, args.command, extra_args)
-            session.commands[idx] = cmd
-            cmd.run()
-
-            return cmd.render(idx, timeout=5.0)
+            idx, rendered = _run_isolated(session, args.command, extra_args)
+            return rendered
 
         else:
             if 0 not in session.commands or session.commands[0].finished is not None:
-                bash_session = BashSession(session.snapbox_name, session.box_spec)
+                bash_session = BashSession(session.snapbox_name)
                 bash_session.run()
                 session.commands[0] = bash_session
 
@@ -386,6 +475,11 @@ class wait_for_command:
     """Block to allow a running command to accumulate output."""
     command_index: Optional[int] = toolprop(desc="Index (#) of the command. If omitted, waits on all running commands")
     timeout: float = toolprop(desc="Seconds to wait (max 60)")
+
+    # This tool's whole job is to block; give run_with_timeout a sync window
+    # longer than the handler's own 60s cap so it actually waits instead of
+    # being detached and returned as "Launched long-running task".
+    sync_timeout = 70
 
     def handler(agent, session, args):
         timeout = min(args.timeout, 60.0)

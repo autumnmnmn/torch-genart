@@ -19,9 +19,8 @@ class collect_source:
     )
 
     def handler(agent, session, args):
-        box_spec = session.box_spec
 
-        cmd = ["in-box", box_spec, "--no-pty", "--", "collect", "--local", "-f"]
+        cmd = ["in-env", "--as", agent.name, "--no-pty", "--", "collect", "--local", "-f"]
 
         if args.path:
             cmd.append(args.path)

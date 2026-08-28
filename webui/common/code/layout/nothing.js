@@ -68,7 +68,8 @@ export async function main() {
         col3: load("layout/split", [{...noth3, orientation: "col"}]),
         main: load("code/orb", ["/main.orb"]),
         spinner: load("spinner"),
-        highlight: load("code/highlight")
+        highlight: load("code/highlight"),
+        pyt: load("debug/pyt")
     };
 
     backdrop.$contextMenu = {

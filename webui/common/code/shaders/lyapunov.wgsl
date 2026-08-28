@@ -22,7 +22,7 @@ struct Uniforms /* buffer 0 0 */ {
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var output_texture: texture_storage_2d<r32float, write>;
+@group(0) @binding(1) var output_texture: texture_storage_2d<rg32float, write>;
 
 $paste(core.wgsl);
 $paste(complex.wgsl);
@@ -53,6 +53,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var flipped: bool = false;
 
+    var diverged_at: u32 = 0;
+
     for (var iter = 0u; iter < uniforms.iterations; iter = iter + 1u) {
         var final_offset = select(uniforms.seq_len,0,uniforms.mode == 0u);
         for (var offset = 0u; offset <= final_offset; offset = offset + 1u) {
@@ -82,6 +84,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 lyapunov[offset] = c_avg(lyapunov[offset], term, iter - uniforms.skip);
             }
             x[offset] = x_next;
+
+        }
+        if (hacky_isnan(x[0]) && diverged_at == 0) {
+            diverged_at = iter;
         }
     }
 
@@ -118,7 +124,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     color = select(color, vec4<f32>(uniforms.nan_color, 1.0), isnan);
     */
 
-    textureStore(output_texture, vec2<i32>(i32(px), i32(py)), vec4f(val, 0.0, 0.0, 0.0));
+    textureStore(output_texture, vec2<i32>(i32(px), i32(py)), vec4f(val, (f32(diverged_at) / f32(uniforms.iterations)), 0.0, 0.0));
 }
 
 
